@@ -235,6 +235,10 @@ function showToast(message) {
   }, 2600);
 }
 
+function installHint() {
+  return 'On iPhone or iPad, use Safari Share -> Add to Home Screen.';
+}
+
 function openModal(type, record = null) {
   state.modal = { type, record };
   render();
@@ -332,11 +336,14 @@ function wireShellActions() {
   const installButton = document.querySelector('#install-button');
   if (installButton) {
     installButton.addEventListener('click', () => {
-      if (!state.deferredInstallPrompt) return;
+      if (!state.deferredInstallPrompt) {
+        showToast(installHint());
+        return;
+      }
       state.deferredInstallPrompt.prompt();
       state.deferredInstallPrompt = null;
       render();
-    }, { once: true });
+    });
   }
 
   const closeButton = document.querySelector('#close-modal');
@@ -1240,6 +1247,11 @@ window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
   state.deferredInstallPrompt = event;
   render();
+});
+
+window.addEventListener('appinstalled', () => {
+  state.deferredInstallPrompt = null;
+  showToast('Installed to your device.');
 });
 
 async function seedIfEmpty() {
