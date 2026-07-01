@@ -11,7 +11,7 @@ Meal Memory is a mobile-first Progressive Web App for remembering restaurant mea
 - Which photos, notes, and ratings belong to that meal?
 - Where is the restaurant, and how do I get back there?
 
-The first version should run cheaply as a static PWA with local-first storage. The architecture should allow cloud sync, authentication, and third-party restaurant metadata providers to be added later without rewriting the application.
+The first version should run cheaply as a static PWA with local-first storage. The architecture should allow cloud sync, authentication, read-only sharing, and third-party restaurant metadata providers to be added later without rewriting the application.
 
 ## 2. Primary Goals
 
@@ -19,6 +19,8 @@ The first version should run cheaply as a static PWA with local-first storage. T
 - Store meals, restaurants, dishes, people, ratings, notes, and photos.
 - Work offline or with unreliable mobile connectivity.
 - Keep initial deployment cheap: static hosting plus browser storage.
+- Support account-backed sync across devices.
+- Support read-only deep links for shared meal memories.
 - Design storage behind interfaces so the app can later use Supabase, Firebase, SQLite sync, S3-compatible photo storage, or another provider.
 - Support restaurant metadata enrichment through provider adapters, starting with manually entered restaurant data.
 
@@ -62,10 +64,15 @@ Profiles are not full login accounts in the MVP. They are local entities that ca
 - As a user, I can track each person's opinion about a dish.
 - As a user, I can quickly search restaurants, dishes, notes, and people.
 - As a user, I can open a restaurant detail page and see my meal history there.
+- As a user, I can add a place by selecting my current location or choosing a point on a map, and the app can prefill restaurant metadata from that location.
+- As a user, I can bypass location lookup and create a place manually when location services are unavailable.
+- As a user, I can open Yelp or a Yelp search from a restaurant result or saved restaurant record.
 - As a user, I can install the app to my phone home screen.
 - As a user, I can use the core app offline.
 - As a user, I can export my data as JSON for backup.
 - As a user, I can import a previous JSON backup.
+- As a user, I can sign in so my data syncs across devices.
+- As a user, I can share a read-only deep link to a meal with notes, photos, and ordering memory.
 
 ## 6. MVP Feature Set
 
@@ -77,6 +84,7 @@ Recommended elements:
 
 - Search input across restaurants, dishes, notes, and profiles.
 - Quick action to add a meal.
+- Quick action to add a place using the location wizard or manual bypass.
 - Recent meals list.
 - Favorite or highest-rated restaurants.
 - "Need to remember" notes, such as dishes with modification notes.
@@ -88,11 +96,13 @@ Each restaurant should include:
 
 - Name
 - Address
-- Neighborhood or city
+- City and region
+- Optional GPS coordinates
 - Cuisine tags
 - Website URL
 - Phone number
 - Map/directions URL
+- Yelp URL or imported Yelp reference when available
 - Notes
 - Optional external metadata provider IDs
 - Optional imported image URL
@@ -263,6 +273,7 @@ Recommended routes:
 - `/dishes/:dishId`
 - `/people`
 - `/people/:profileId`
+- `/share/:shareToken`
 - `/settings`
 - `/settings/backup`
 
@@ -289,10 +300,25 @@ type ISODate = string;
 
 interface BaseEntity {
   id: EntityId;
+  ownerUserId?: EntityId;
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
   deletedAt?: ISODateTime | null;
   schemaVersion: number;
+}
+
+interface UserAccount extends BaseEntity {
+  email?: string;
+  displayName?: string;
+  authProvider: 'email_magic_link' | 'passkey' | 'oauth' | 'anonymous_local';
+  defaultWorkspaceId?: EntityId;
+}
+
+interface Workspace extends BaseEntity {
+  name: string;
+  isPersonal: boolean;
+  memberUserIds: EntityId[];
+  shareMode: 'private' | 'shared';
 }
 
 interface Restaurant extends BaseEntity {
@@ -302,10 +328,12 @@ interface Restaurant extends BaseEntity {
   region?: string;
   postalCode?: string;
   country?: string;
-  neighborhood?: string;
+  latitude?: number;
+  longitude?: number;
   phone?: string;
   websiteUrl?: string;
   directionsUrl?: string;
+  yelpUrl?: string;
   cuisineTags: string[];
   notes?: string;
   externalRefs: ExternalRestaurantRef[];
@@ -341,6 +369,9 @@ interface MealVisit extends BaseEntity {
   occasionTags: string[];
   notes?: string;
   photoIds: EntityId[];
+  shareSlug?: string;
+  shareVisibility?: 'private' | 'read_only_link' | 'workspace';
+  shareTokenHash?: string;
 }
 
 interface Dish extends BaseEntity {
@@ -385,6 +416,15 @@ interface PhotoAsset extends BaseEntity {
   altText?: string;
   capturedAt?: ISODateTime;
 }
+
+interface ShareLink extends BaseEntity {
+  entityType: 'meal_visit';
+  entityId: EntityId;
+  shareTokenHash: string;
+  visibility: 'read_only';
+  expiresAt?: ISODateTime;
+  revokedAt?: ISODateTime | null;
+}
 ```
 
 ## 10. Storage Architecture
@@ -396,6 +436,18 @@ Recommended MVP storage:
 - IndexedDB for structured app data.
 - IndexedDB for local photo blobs and thumbnails.
 - LocalStorage only for simple preferences, never primary data.
+
+Recommended sync-ready production storage:
+
+- Postgres for structured app data.
+- Object storage for photos and generated thumbnails.
+- Auth service for user identity, account recovery, and shared links.
+
+Suggested hosted stack:
+
+- Supabase for Postgres, auth, and storage.
+- Static GitHub Pages frontend for the PWA shell.
+- Optional edge/serverless function for share-token generation, provider enrichment, or secure API proxying.
 
 Recommended library options:
 
@@ -441,6 +493,13 @@ interface SyncProvider {
   pull(since?: ISODateTime): Promise<SyncPullResult>;
   push(changes: LocalChangeSet): Promise<SyncPushResult>;
 }
+
+interface AuthProvider {
+  signIn(): Promise<void>;
+  signOut(): Promise<void>;
+  getCurrentUser(): Promise<UserAccount | null>;
+  getAccessToken(): Promise<string | null>;
+}
 ```
 
 Future sync will be easier if every entity has:
@@ -473,6 +532,13 @@ Future providers:
 - Google Places API.
 - Foursquare Places.
 - OpenStreetMap/Nominatim for lower-cost geocoding and basic location data.
+
+Current restaurant-discovery direction:
+
+- Use phone location plus an interactive map to choose or refine a restaurant location.
+- Prefill restaurant name, address, latitude, longitude, and metadata from nearby discovery results.
+- Provide a manual entry bypass when location permissions fail or are skipped.
+- Generate Yelp search links from restaurant name and address, and prefer Yelp deep links only when the platform/app reliably resolves them.
 
 Important note:
 
@@ -539,7 +605,21 @@ Should answer:
 - Who came with me?
 - What are my best photos from here?
 
-### 14.3 Dish Detail
+### 14.3 Meal Detail
+
+Should answer:
+
+- What restaurant was this at?
+- What did I order?
+- What did the meal feel like overall?
+- Who was there?
+- What should I change next time?
+- Which photos and notes belong to this visit?
+- Can I share this memory with someone in read-only mode?
+
+The meal detail screen should support a share action that creates a read-only deep link. That shared view should show only the allowed meal information and should not expose editing controls or account settings. Shared links should be revocable.
+
+### 14.4 Dish Detail
 
 Should answer:
 
@@ -549,7 +629,7 @@ Should answer:
 - Who liked it?
 - What modifications should I request next time?
 
-### 14.4 Person Detail
+### 14.5 Person Detail
 
 Should answer:
 
@@ -618,9 +698,11 @@ src/
 
 - Treat meal records and companion names as private personal data.
 - Keep data local by default.
+- When sync is enabled, data should still be private by default and scoped to the signed-in user or workspace.
 - Do not send user-created data to third parties unless explicitly requested by the user.
 - Store external provider API keys only in a backend or serverless function later, not in the static client.
 - Make export and deletion controls clear.
+- Read-only share links should reveal only the specific meal or memory requested, with no broader account access.
 
 ## 19. Testing Strategy
 
@@ -677,9 +759,10 @@ src/
 
 - Add restaurant metadata provider interface.
 - Add first metadata provider behind a safe backend/serverless boundary.
-- Add sync provider interface.
-- Add change tracking.
+- Add sync provider and auth provider interfaces.
+- Add change tracking and conflict resolution fields.
 - Add optional remote storage provider for photos.
+- Add read-only share-token generation and share-view routes.
 
 ### Phase 4: Cloud Sync
 
@@ -688,6 +771,7 @@ src/
 - Add conflict resolution.
 - Add cross-device sync.
 - Add shared household or family workspace if desired.
+- Add revocable public or semi-public read-only meal links if desired.
 
 ## 21. Open Product Questions
 
@@ -697,14 +781,19 @@ src/
 - Should meal visits support takeout and delivery as first-class modes?
 - Should restaurant metadata use Yelp, Google Places, or a lower-cost/open provider first?
 - Should the app support private notes per person?
+- Should shared links be public-by-token or limited to invited contacts?
+- Should the login model be email magic link, passkeys, or both?
+- Should shared workspaces be optional or the default once syncing is enabled?
 
 Recommended MVP decisions:
 
 - Use a 5-point rating scale with half steps optional later.
 - Support takeout and delivery as occasion tags.
 - Compress large photos before local storage.
-- Use manual restaurant entry first.
+- Use manual restaurant entry plus location-based discovery.
 - Treat profiles as local people, not login accounts.
+- Use a Supabase-style account and workspace model for sync.
+- Make shared meal links read-only and revocable.
 
 ## 22. Acceptance Criteria For MVP
 
@@ -719,6 +808,8 @@ Recommended MVP decisions:
 - The app can attach photos locally.
 - The app can search across core entities.
 - The app can export and import user data.
+- The app can sync data across devices for a signed-in user.
+- The app can generate a read-only share link for a meal.
 - The app can be deployed as a static site without a backend.
 
 ## 23. Prompt For An AI Coding Agent
@@ -780,4 +871,3 @@ After implementation:
 - Start the dev server and report the local URL.
 - Summarize what was built and any remaining gaps.
 ```
-

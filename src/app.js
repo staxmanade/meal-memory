@@ -333,6 +333,7 @@ function emptyRestaurantDraft() {
 function createPlaceWizard() {
   return {
     step: 'location',
+    entryMode: 'guided',
     coords: null,
     currentLocationLabel: '',
     results: [],
@@ -453,6 +454,9 @@ function wireShellActions() {
 
   const wizardCloseIcon = document.querySelector('#wizard-close-icon');
   if (wizardCloseIcon) wizardCloseIcon.addEventListener('click', closePlaceWizard, { once: true });
+
+  const wizardSkipLocation = document.querySelector('#wizard-skip-location');
+  if (wizardSkipLocation) wizardSkipLocation.addEventListener('click', skipWizardLocation, { once: true });
 
   const wizardUseCurrent = document.querySelector('#wizard-use-current');
   if (wizardUseCurrent) wizardUseCurrent.addEventListener('click', () => useCurrentLocation(), { once: true });
@@ -1147,6 +1151,20 @@ function goToWizardStep(step) {
   render();
 }
 
+function skipWizardLocation() {
+  if (!state.placeWizard) return;
+  state.placeWizard.entryMode = 'manual';
+  state.placeWizard.coords = null;
+  state.placeWizard.currentLocationLabel = '';
+  state.placeWizard.results = [];
+  state.placeWizard.selectedResult = null;
+  state.placeWizard.draft = emptyRestaurantDraft();
+  state.placeWizard.error = '';
+  state.placeWizard.loading = false;
+  state.placeWizard.step = 'details';
+  render();
+}
+
 async function saveWizardPlace(form) {
   if (!state.placeWizard) return;
   const values = collectForm(form);
@@ -1605,6 +1623,7 @@ function renderPlaceWizard() {
   const footer = wizard.step === 'location'
     ? `
       <button type="button" class="button ghost" id="wizard-close">Cancel</button>
+      <button type="button" class="button ghost" id="wizard-skip-location">Skip location</button>
       <button type="button" class="button primary" id="wizard-next-from-location">Search nearby</button>
     `
     : wizard.step === 'results'
@@ -1613,7 +1632,7 @@ function renderPlaceWizard() {
         <button type="button" class="button ghost" id="wizard-close">Cancel</button>
       `
       : `
-        <button type="button" class="button ghost" id="wizard-back-results">Back</button>
+        ${wizard.entryMode === 'manual' ? '<button type="button" class="button ghost" id="wizard-back-location">Back</button>' : '<button type="button" class="button ghost" id="wizard-back-results">Back</button>'}
         <button type="submit" form="wizard-form" class="button primary" id="wizard-save">Save place</button>
       `;
 
