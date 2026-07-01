@@ -547,7 +547,7 @@ function restaurantCard(restaurant) {
         ${photo ? `<img class="thumb" style="width:64px;height:64px" src="${photo.thumbnailDataUrl}" alt="${escapeHtml(photo.altText)}" />` : `<div class="avatar">${escapeHtml(restaurant.name[0] || 'R')}</div>`}
         <div>
           <h3>${escapeHtml(restaurant.name)}</h3>
-          <p class="subtle">${escapeHtml([restaurant.neighborhood, restaurant.city].filter(Boolean).join(', ') || restaurant.address || 'No location yet')}</p>
+          <p class="subtle">${escapeHtml([restaurant.city, restaurant.address].filter(Boolean).join(', ') || 'No location yet')}</p>
           <div class="pill-list">${restaurant.cuisineTags.slice(0, 3).map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join('')}<span class="pill warn">${meals} meals</span></div>
         </div>
       </div>
@@ -638,7 +638,7 @@ function renderRestaurantDetail(idValue) {
   const photos = state.data.photos.filter((photo) => photo.ownerId === restaurant.id || meals.some((meal) => meal.id === photo.ownerId));
 
   return `
-    ${detailHeader('Place', restaurant.name, [restaurant.neighborhood, restaurant.city, restaurant.address].filter(Boolean).join(' · '), 'restaurant', restaurant)}
+    ${detailHeader('Place', restaurant.name, [restaurant.city, restaurant.address].filter(Boolean).join(' · '), 'restaurant', restaurant)}
     <section class="detail-band">
       <div class="stack">
         <div class="card">
@@ -864,7 +864,6 @@ function restaurantForm(record = {}) {
       ${field('Cuisine tags', 'cuisineTags', (record.cuisineTags || []).join(', '), 'text', false, 'Thai, date night, ramen')}
       ${field('Address', 'address', record.address)}
       ${field('City', 'city', record.city)}
-      ${field('Neighborhood', 'neighborhood', record.neighborhood)}
       ${field('Phone', 'phone', record.phone, 'tel')}
       ${field('Website', 'websiteUrl', record.websiteUrl, 'url')}
       ${field('Directions URL', 'directionsUrl', record.directionsUrl, 'url')}
@@ -1024,7 +1023,6 @@ async function saveFromModal(form) {
       name: values.name.trim(),
       address: values.address,
       city: values.city,
-      neighborhood: values.neighborhood,
       phone: values.phone,
       websiteUrl: values.websiteUrl,
       directionsUrl: values.directionsUrl,
