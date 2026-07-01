@@ -541,6 +541,37 @@ textarea:focus {
   padding: 14px;
 }
 
+.wizard .modal-body {
+  display: grid;
+  gap: 14px;
+}
+
+.wizard-map-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.wizard-map {
+  width: 100%;
+  min-height: 280px;
+  height: clamp(280px, 42vh, 460px);
+  background: #e7ece7;
+}
+
+.wizard-results {
+  display: grid;
+  gap: 10px;
+}
+
+.wizard-result {
+  display: grid;
+  gap: 12px;
+}
+
+.wizard-result .actions {
+  justify-content: flex-start;
+}
+
 .modal-footer {
   position: sticky;
   bottom: 0;
@@ -660,5 +691,10 @@ textarea:focus {
   .modal {
     border-radius: var(--radius) var(--radius) 0 0;
     max-height: 94vh;
+  }
+
+  .wizard-map {
+    min-height: 240px;
+    height: 40vh;
   }
 }

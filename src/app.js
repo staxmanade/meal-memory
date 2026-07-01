@@ -17,9 +17,14 @@ const state = {
     photos: []
   },
   modal: null,
+  placeWizard: null,
   toast: '',
   deferredInstallPrompt: null,
   photoUrls: new Map()
+};
+
+const leafletLoader = {
+  promise: null
 };
 
 const app = document.querySelector('#app');
@@ -29,6 +34,7 @@ const icons = {
   store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10h16l-1-6H5l-1 6Z"/><path d="M6 10v10h12V10"/><path d="M9 20v-6h6v6"/><path d="M4 10c0 2 4 2 4 0 0 2 4 2 4 0 0 2 4 2 4 0 0 2 4 2 4 0"/></svg>',
   meal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v20"/><path d="M4 2v5a4 4 0 0 0 8 0V2"/><path d="M18 2v20"/><path d="M18 2c2 2 3 5 3 8s-1 5-3 6"/></svg>',
   dish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s6-4.4 6-11a6 6 0 1 0-12 0c0 6.6 6 11 6 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
   search: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
@@ -157,6 +163,74 @@ function now() {
   return new Date().toISOString();
 }
 
+function roundCoord(value) {
+  return Math.round(Number(value) * 1000000) / 1000000;
+}
+
+function formatCoordinate(value) {
+  return Number(value).toFixed(6);
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const toRad = (value) => (value * Math.PI) / 180;
+  const earthRadius = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * earthRadius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function makeMapsUrl(lat, lng, label = '') {
+  const query = label ? `${label} @ ${lat},${lng}` : `${lat},${lng}`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function makeYelpSearchUrl(name, address = '', city = '') {
+  const location = [address, city].filter(Boolean).join(', ');
+  return `https://www.yelp.com/search?find_desc=${encodeURIComponent(name || '')}&find_loc=${encodeURIComponent(location || city || '')}`;
+}
+
+async function loadLeaflet() {
+  if (window.L) return window.L;
+  if (!leafletLoader.promise) {
+    leafletLoader.promise = new Promise((resolve, reject) => {
+      const existingCss = document.querySelector('link[data-leaflet-css]');
+      if (!existingCss) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        link.crossOrigin = '';
+        link.setAttribute('data-leaflet-css', 'true');
+        document.head.appendChild(link);
+      }
+
+      if (window.L) {
+        resolve(window.L);
+        return;
+      }
+
+      const existingScript = document.querySelector('script[data-leaflet-js]');
+      if (existingScript) {
+        existingScript.addEventListener('load', () => resolve(window.L), { once: true });
+        existingScript.addEventListener('error', reject, { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.crossOrigin = '';
+      script.setAttribute('data-leaflet-js', 'true');
+      script.onload = () => resolve(window.L);
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+  return leafletLoader.promise;
+}
+
 function todayLocal() {
   const date = new Date();
   date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
@@ -239,6 +313,37 @@ function installHint() {
   return 'On iPhone or iPad, use Safari Share -> Add to Home Screen.';
 }
 
+function emptyRestaurantDraft() {
+  return {
+    name: '',
+    address: '',
+    city: '',
+    region: '',
+    latitude: '',
+    longitude: '',
+    phone: '',
+    websiteUrl: '',
+    directionsUrl: '',
+    yelpUrl: '',
+    cuisineTags: '',
+    notes: ''
+  };
+}
+
+function createPlaceWizard() {
+  return {
+    step: 'location',
+    coords: null,
+    currentLocationLabel: '',
+    results: [],
+    selectedResult: null,
+    draft: emptyRestaurantDraft(),
+    loading: false,
+    error: '',
+    mapToken: id('place_wizard_map')
+  };
+}
+
 function openModal(type, record = null) {
   state.modal = { type, record };
   render();
@@ -249,6 +354,15 @@ function closeModal() {
   if (state.selectedId === 'new') {
     state.selectedId = null;
     location.hash = `#${state.route}`;
+  }
+  render();
+}
+
+function closePlaceWizard() {
+  state.placeWizard = null;
+  if (state.selectedId === 'new') {
+    state.selectedId = null;
+    location.hash = '#restaurants';
   }
   render();
 }
@@ -285,12 +399,16 @@ function renderShell(content) {
       <main class="main">${content}</main>
     </div>
     ${state.modal ? renderModal() : ''}
+    ${state.placeWizard ? renderPlaceWizard() : ''}
     ${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ''}
-  `;
+  `; 
 
   const installButton = document.querySelector('#install-button');
   if (state.deferredInstallPrompt && installButton) installButton.style.display = 'inline-flex';
   wireShellActions();
+  if (state.placeWizard && state.placeWizard.step === 'location') {
+    setTimeout(() => initPlaceWizardMap().catch(() => {}), 0);
+  }
 }
 
 function wireShellActions() {
@@ -330,6 +448,51 @@ function wireShellActions() {
     }, { once: true });
   }
 
+  const wizardClose = document.querySelector('#wizard-close');
+  if (wizardClose) wizardClose.addEventListener('click', closePlaceWizard, { once: true });
+
+  const wizardCloseIcon = document.querySelector('#wizard-close-icon');
+  if (wizardCloseIcon) wizardCloseIcon.addEventListener('click', closePlaceWizard, { once: true });
+
+  const wizardUseCurrent = document.querySelector('#wizard-use-current');
+  if (wizardUseCurrent) wizardUseCurrent.addEventListener('click', () => useCurrentLocation(), { once: true });
+
+  const wizardSearchNearby = document.querySelector('#wizard-search-nearby');
+  if (wizardSearchNearby) wizardSearchNearby.addEventListener('click', () => searchWizardNearby(), { once: true });
+
+  const wizardNextFromLocation = document.querySelector('#wizard-next-from-location');
+  if (wizardNextFromLocation) wizardNextFromLocation.addEventListener('click', () => searchWizardNearby(), { once: true });
+
+  const wizardBackLocation = document.querySelector('#wizard-back-location');
+  if (wizardBackLocation) wizardBackLocation.addEventListener('click', () => goToWizardStep('location'), { once: true });
+
+  const wizardBackResults = document.querySelector('#wizard-back-results');
+  if (wizardBackResults) wizardBackResults.addEventListener('click', () => goToWizardStep('location'), { once: true });
+
+  const wizardLatitude = document.querySelector('#wizard-latitude');
+  if (wizardLatitude) {
+    wizardLatitude.addEventListener('change', (event) => {
+      const latitude = Number(event.target.value);
+      if (!Number.isFinite(latitude)) return;
+      const current = parseWizardCoords(state.placeWizard);
+      setPlaceWizardCoords(latitude, current ? current.longitude : latitude, { skipReverse: false }).catch(() => {});
+    }, { once: true });
+  }
+
+  const wizardLongitude = document.querySelector('#wizard-longitude');
+  if (wizardLongitude) {
+    wizardLongitude.addEventListener('change', (event) => {
+      const longitude = Number(event.target.value);
+      if (!Number.isFinite(longitude)) return;
+      const current = parseWizardCoords(state.placeWizard);
+      setPlaceWizardCoords(current ? current.latitude : longitude, longitude, { skipReverse: false }).catch(() => {});
+    }, { once: true });
+  }
+
+  document.querySelectorAll('[data-place-result-id]').forEach((button) => {
+    button.addEventListener('click', () => chooseWizardResult(button.dataset.placeResultId), { once: true });
+  });
+
   const exportDataButton = document.querySelector('#export-data');
   if (exportDataButton) exportDataButton.addEventListener('click', exportData, { once: true });
 
@@ -357,7 +520,7 @@ function render() {
   if (state.query.trim()) {
     renderShell(renderSearch());
   } else if (state.route === 'restaurants' && state.selectedId === 'new') {
-    state.modal = { type: 'restaurant', record: null };
+    if (!state.placeWizard) state.placeWizard = createPlaceWizard();
     renderShell(renderRestaurants());
   } else if (state.route === 'meals' && state.selectedId === 'new') {
     state.modal = { type: 'meal', record: null };
@@ -449,7 +612,7 @@ function renderRestaurants() {
         <h1>Places</h1>
         <p class="muted">Your private restaurant memory, from favorite tables to things worth skipping.</p>
       </div>
-      <button type="button" class="button primary" data-action="open-modal" data-open="restaurant">${icons.plus}<span>Add place</span></button>
+      <button type="button" class="button primary" data-route="restaurants" data-id="new">${icons.plus}<span>Add place</span></button>
     </section>
     <div class="grid two">${state.data.restaurants.length ? state.data.restaurants.map(restaurantCard).join('') : emptyState('Add a restaurant, then attach meals and dishes to it.')}</div>
   `;
@@ -636,6 +799,7 @@ function renderRestaurantDetail(idValue) {
   const meals = state.data.meals.filter((meal) => meal.restaurantId === restaurant.id);
   const dishes = state.data.dishes.filter((dish) => dish.restaurantId === restaurant.id);
   const photos = state.data.photos.filter((photo) => photo.ownerId === restaurant.id || meals.some((meal) => meal.id === photo.ownerId));
+  const yelpUrl = restaurant.yelpUrl || makeYelpSearchUrl(restaurant.name, restaurant.address, restaurant.city);
 
   return `
     ${detailHeader('Place', restaurant.name, [restaurant.city, restaurant.address].filter(Boolean).join(' · '), 'restaurant', restaurant)}
@@ -647,6 +811,7 @@ function renderRestaurantDetail(idValue) {
           <div class="pill-list">${restaurant.cuisineTags.map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join('')}</div>
           <div class="actions" style="margin-top:12px">
             ${restaurant.directionsUrl ? `<a class="button" href="${escapeHtml(restaurant.directionsUrl)}" target="_blank" rel="noreferrer">Directions</a>` : ''}
+            <a class="button" href="${escapeHtml(yelpUrl)}" target="_blank" rel="noreferrer">${icons.search}<span>Yelp</span></a>
             ${restaurant.websiteUrl ? `<a class="button" href="${escapeHtml(restaurant.websiteUrl)}" target="_blank" rel="noreferrer">Website</a>` : ''}
             ${restaurant.phone ? `<a class="button" href="tel:${escapeHtml(restaurant.phone)}">Call</a>` : ''}
           </div>
@@ -858,18 +1023,277 @@ function modalFields(type, record) {
 }
 
 function restaurantForm(record = {}) {
+  const cuisineTags = Array.isArray(record.cuisineTags) ? record.cuisineTags.join(', ') : record.cuisineTags || '';
   return `
     <div class="form-grid">
       ${field('Name', 'name', record.name, 'text', true)}
-      ${field('Cuisine tags', 'cuisineTags', (record.cuisineTags || []).join(', '), 'text', false, 'Thai, date night, ramen')}
+      ${field('Cuisine tags', 'cuisineTags', cuisineTags, 'text', false, 'Thai, date night, ramen')}
       ${field('Address', 'address', record.address)}
       ${field('City', 'city', record.city)}
+      ${field('Latitude', 'latitude', record.latitude, 'number')}
+      ${field('Longitude', 'longitude', record.longitude, 'number')}
       ${field('Phone', 'phone', record.phone, 'tel')}
       ${field('Website', 'websiteUrl', record.websiteUrl, 'url')}
       ${field('Directions URL', 'directionsUrl', record.directionsUrl, 'url')}
+      ${field('Yelp URL', 'yelpUrl', record.yelpUrl, 'url')}
       ${field('Notes', 'notes', record.notes, 'textarea')}
     </div>
   `;
+}
+
+function updatePlaceWizard(patch, rerender = true) {
+  if (!state.placeWizard) return;
+  state.placeWizard = { ...state.placeWizard, ...patch };
+  if (rerender) render();
+}
+
+async function setPlaceWizardCoords(latitude, longitude, options = {}) {
+  const coords = { latitude: roundCoord(latitude), longitude: roundCoord(longitude) };
+  if (!state.placeWizard) return;
+  const reverse = options.skipReverse ? null : await reverseGeocode(coords).catch(() => null);
+  const wizard = state.placeWizard;
+  const draft = { ...wizard.draft };
+  draft.latitude = formatCoordinate(coords.latitude);
+  draft.longitude = formatCoordinate(coords.longitude);
+  if (reverse) {
+    if (!draft.address && reverse.address) draft.address = reverse.address;
+    if (!draft.city && reverse.city) draft.city = reverse.city;
+    if (!draft.region && reverse.region) draft.region = reverse.region;
+  }
+  updatePlaceWizard({
+    coords,
+    currentLocationLabel: reverse && reverse.displayName ? reverse.displayName : options.label || wizard.currentLocationLabel,
+    draft
+  });
+}
+
+async function useCurrentLocation() {
+  if (!navigator.geolocation) {
+    showToast('Location access is unavailable.');
+    return;
+  }
+  if (!state.placeWizard) return;
+  state.placeWizard.loading = true;
+  state.placeWizard.error = '';
+  render();
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      if (!state.placeWizard) return;
+      state.placeWizard.loading = false;
+      await setPlaceWizardCoords(position.coords.latitude, position.coords.longitude, { label: 'Current location' });
+      await searchWizardNearby();
+    },
+    (error) => {
+      if (!state.placeWizard) return;
+      state.placeWizard.loading = false;
+      state.placeWizard.error = error.message || 'Could not access location.';
+      render();
+      showToast(state.placeWizard.error);
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+  );
+}
+
+async function searchWizardNearby() {
+  if (!state.placeWizard) return;
+  let coords = parseWizardCoords(state.placeWizard);
+  if (!coords) {
+    const latInput = document.querySelector('#wizard-latitude');
+    const lonInput = document.querySelector('#wizard-longitude');
+    const latitude = latInput ? Number(latInput.value) : NaN;
+    const longitude = lonInput ? Number(lonInput.value) : NaN;
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      coords = { latitude, longitude };
+      await setPlaceWizardCoords(latitude, longitude, { skipReverse: false });
+    }
+  }
+  if (!coords) {
+    showToast('Set a location first.');
+    return;
+  }
+  state.placeWizard.loading = true;
+  state.placeWizard.error = '';
+  render();
+  try {
+    const results = await searchNearbyPlaces(coords);
+    if (!state.placeWizard) return;
+    state.placeWizard.results = results;
+    state.placeWizard.loading = false;
+    state.placeWizard.step = 'results';
+    render();
+  } catch (error) {
+    if (!state.placeWizard) return;
+    state.placeWizard.loading = false;
+    state.placeWizard.error = error.message || 'Nearby search failed.';
+    state.placeWizard.results = [];
+    state.placeWizard.step = 'results';
+    render();
+  }
+}
+
+async function chooseWizardResult(resultId) {
+  if (!state.placeWizard) return;
+  const result = state.placeWizard.results.find((item) => item.id === resultId);
+  if (!result) return;
+  state.placeWizard.draft = restaurantDraftFromResult(result, {});
+  state.placeWizard.selectedResult = result;
+  state.placeWizard.step = 'details';
+  render();
+}
+
+function goToWizardStep(step) {
+  if (!state.placeWizard) return;
+  state.placeWizard.step = step;
+  render();
+}
+
+async function saveWizardPlace(form) {
+  if (!state.placeWizard) return;
+  const values = collectForm(form);
+  const base = makeEntity();
+  const latitude = values.latitude ? Number(values.latitude) : null;
+  const longitude = values.longitude ? Number(values.longitude) : null;
+  await repository.save('restaurants', {
+    ...base,
+    name: values.name.trim(),
+    address: values.address,
+    city: values.city,
+    latitude,
+    longitude,
+    phone: values.phone,
+    websiteUrl: values.websiteUrl,
+    directionsUrl: values.directionsUrl || (Number.isFinite(latitude) && Number.isFinite(longitude) ? makeMapsUrl(latitude, longitude, values.name) : ''),
+    yelpUrl: values.yelpUrl || makeYelpSearchUrl(values.name, values.address, values.city),
+    cuisineTags: normalizeList(values.cuisineTags),
+    notes: values.notes,
+    externalRefs: [
+      ...(values.yelpUrl ? [{ provider: 'yelp', providerId: values.yelpUrl, url: values.yelpUrl, lastImportedAt: now() }] : [])
+    ]
+  });
+  closePlaceWizard();
+  await refresh('Place saved.');
+}
+
+function wizardResultAddress(result) {
+  return [result.address, result.city, result.region].filter(Boolean).join(', ') || 'No address';
+}
+
+function restaurantDraftFromResult(result, reverse = {}) {
+  const latitude = roundCoord(result.latitude);
+  const longitude = roundCoord(result.longitude);
+  const draft = emptyRestaurantDraft();
+  draft.name = result.name || '';
+  draft.address = result.address || reverse.address || '';
+  draft.city = result.city || reverse.city || '';
+  draft.region = result.region || reverse.region || '';
+  draft.latitude = Number.isFinite(latitude) ? formatCoordinate(latitude) : '';
+  draft.longitude = Number.isFinite(longitude) ? formatCoordinate(longitude) : '';
+  draft.phone = result.phone || '';
+  draft.websiteUrl = result.website || '';
+  draft.directionsUrl = Number.isFinite(latitude) && Number.isFinite(longitude) ? makeMapsUrl(latitude, longitude, result.name || '') : '';
+  draft.yelpUrl = makeYelpSearchUrl(result.name || '', draft.address, draft.city);
+  draft.cuisineTags = (result.cuisineTags || []).join(', ');
+  draft.notes = '';
+  return draft;
+}
+
+function parseWizardCoords(wizard) {
+  const draft = wizard && wizard.draft ? wizard.draft : {};
+  const coords = wizard && wizard.coords ? wizard.coords : {};
+  const latitude = Number(draft.latitude || coords.latitude);
+  const longitude = Number(draft.longitude || coords.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
+
+async function reverseGeocode(coords) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(coords.latitude)}&lon=${encodeURIComponent(coords.longitude)}&addressdetails=1`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json'
+    }
+  });
+  if (!response.ok) return null;
+  const payload = await response.json();
+  const address = payload.address || {};
+  return {
+    displayName: payload.display_name || '',
+    address: [address.house_number, address.road].filter(Boolean).join(' ') || '',
+    city: address.city || address.town || address.village || address.hamlet || '',
+    region: address.state || address.region || '',
+    postcode: address.postcode || ''
+  };
+}
+
+async function searchNearbyPlaces(coords) {
+  if (!coords) return [];
+  const query = `
+    [out:json][timeout:25];
+    (
+      node["amenity"="restaurant"](around:1500,${coords.latitude},${coords.longitude});
+      way["amenity"="restaurant"](around:1500,${coords.latitude},${coords.longitude});
+      relation["amenity"="restaurant"](around:1500,${coords.latitude},${coords.longitude});
+    );
+    out center tags;
+  `;
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.openstreetmap.ru/cgi/interpreter'
+  ];
+  let payload = null;
+  let lastError = null;
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=UTF-8'
+        },
+        body: query.trim()
+      });
+      if (!response.ok) {
+        lastError = new Error(`Nearby search failed (${response.status}).`);
+        continue;
+      }
+      payload = await response.json();
+      if (payload && Array.isArray(payload.elements)) break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!payload || !Array.isArray(payload.elements)) throw lastError || new Error('Nearby search failed.');
+  return (payload.elements || [])
+    .map((element) => {
+      const latitude = Number(element.lat || (element.center && element.center.lat));
+      const longitude = Number(element.lon || (element.center && element.center.lon));
+      const tags = element.tags || {};
+      const address = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ');
+      const city = tags['addr:city'] || '';
+      const region = tags['addr:state'] || '';
+      const result = {
+        id: `${element.type}_${element.id}`,
+        name: tags.name || 'Unnamed place',
+        address,
+        city,
+        region,
+        latitude,
+        longitude,
+        phone: tags.phone || tags['contact:phone'] || '',
+        website: tags.website || tags['contact:website'] || '',
+        cuisineTags: [tags.cuisine, tags.amenity].filter(Boolean),
+        distance: Number.isFinite(latitude) && Number.isFinite(longitude)
+          ? haversineMeters(coords.latitude, coords.longitude, latitude, longitude)
+          : null,
+        osmUrl: `https://www.openstreetmap.org/${element.type}/${element.id}`
+      };
+      result.yelpUrl = makeYelpSearchUrl(result.name, result.address, result.city);
+      result.directionsUrl = makeMapsUrl(latitude, longitude, result.name);
+      return result;
+    })
+    .filter((item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude))
+    .sort((a, b) => (a.distance || 0) - (b.distance || 0))
+    .slice(0, 12);
 }
 
 function profileForm(record = {}) {
@@ -1023,9 +1447,12 @@ async function saveFromModal(form) {
       name: values.name.trim(),
       address: values.address,
       city: values.city,
+      latitude: values.latitude ? Number(values.latitude) : null,
+      longitude: values.longitude ? Number(values.longitude) : null,
       phone: values.phone,
       websiteUrl: values.websiteUrl,
       directionsUrl: values.directionsUrl,
+      yelpUrl: values.yelpUrl,
       cuisineTags: normalizeList(values.cuisineTags),
       notes: values.notes,
       externalRefs: base.externalRefs || []
@@ -1170,6 +1597,142 @@ function settingsPanel() {
   `;
 }
 
+function renderPlaceWizard() {
+  if (!state.placeWizard) return '';
+  const wizard = state.placeWizard;
+  const coords = parseWizardCoords(wizard);
+  const yelpUrl = wizard.selectedResult ? wizard.selectedResult.yelpUrl : makeYelpSearchUrl(wizard.draft.name, wizard.draft.address, wizard.draft.city);
+  const footer = wizard.step === 'location'
+    ? `
+      <button type="button" class="button ghost" id="wizard-close">Cancel</button>
+      <button type="button" class="button primary" id="wizard-next-from-location">Search nearby</button>
+    `
+    : wizard.step === 'results'
+      ? `
+        <button type="button" class="button ghost" id="wizard-back-location">Back</button>
+        <button type="button" class="button ghost" id="wizard-close">Cancel</button>
+      `
+      : `
+        <button type="button" class="button ghost" id="wizard-back-results">Back</button>
+        <button type="submit" form="wizard-form" class="button primary" id="wizard-save">Save place</button>
+      `;
+
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal wizard" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+        <header>
+          <div>
+            <p class="eyebrow">Add place</p>
+            <h2 id="wizard-title">${escapeHtml(wizard.step === 'location' ? 'Location' : wizard.step === 'results' ? 'Nearby' : 'Details')}</h2>
+          </div>
+          <button class="icon-button" id="wizard-close-icon" aria-label="Close">${icons.close}</button>
+        </header>
+        <div class="modal-body">
+          ${wizard.step === 'location' ? `
+            <div class="stack">
+              <div class="actions">
+                <button type="button" class="button primary" id="wizard-use-current">${icons.pin}<span>Current location</span></button>
+                <button type="button" class="button" id="wizard-search-nearby">${icons.search}<span>Find nearby</span></button>
+              </div>
+              <div class="form-grid">
+                ${field('Latitude', 'wizard-latitude', wizard.draft.latitude, 'number')}
+                ${field('Longitude', 'wizard-longitude', wizard.draft.longitude, 'number')}
+              </div>
+              <div class="card wizard-map-card">
+                <div id="place-map" class="wizard-map" aria-label="Map"></div>
+              </div>
+              ${wizard.currentLocationLabel ? `<p class="subtle">${escapeHtml(wizard.currentLocationLabel)}</p>` : ''}
+              ${wizard.error ? `<p class="subtle">${escapeHtml(wizard.error)}</p>` : ''}
+            </div>
+          ` : ''}
+          ${wizard.step === 'results' ? `
+            <div class="stack">
+              <div class="wizard-results">
+                ${wizard.loading ? '<div class="empty">Searching nearby places...</div>' : ''}
+                ${!wizard.loading && wizard.results.length ? wizard.results.map((result) => wizardResultCard(result, yelpUrl)).join('') : ''}
+                ${!wizard.loading && !wizard.results.length ? '<div class="empty">No nearby places found.</div>' : ''}
+              </div>
+              ${wizard.error ? `<p class="subtle">${escapeHtml(wizard.error)}</p>` : ''}
+            </div>
+          ` : ''}
+          ${wizard.step === 'details' ? `
+            <form id="wizard-form">
+              ${restaurantForm(wizard.draft)}
+            </form>
+            <div class="stack" style="margin-top: 14px">
+              ${wizard.selectedResult ? `
+                <div class="card">
+                  <h3>${escapeHtml(wizard.selectedResult.name)}</h3>
+                  <p class="subtle">${escapeHtml(wizardResultAddress(wizard.selectedResult))}</p>
+                  <div class="actions">
+                    <a class="button" href="${escapeHtml(wizard.selectedResult.yelpUrl)}" target="_blank" rel="noreferrer">${icons.search}<span>Open Yelp</span></a>
+                    <a class="button" href="${escapeHtml(wizard.selectedResult.directionsUrl)}" target="_blank" rel="noreferrer">${icons.store}<span>Map</span></a>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          ` : ''}
+        </div>
+        <footer class="modal-footer">
+          ${footer}
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function wizardResultCard(result, yelpFallbackUrl) {
+  return `
+    <div class="card wizard-result">
+      <div>
+        <h3>${escapeHtml(result.name)}</h3>
+        <p class="subtle">${escapeHtml(wizardResultAddress(result))}</p>
+        ${result.distance !== null ? `<p class="subtle">${(result.distance / 1609.34).toFixed(1)} mi away</p>` : ''}
+      </div>
+      <div class="actions">
+        <button type="button" class="button primary" data-place-result-id="${escapeHtml(result.id)}">Select</button>
+        <a class="button" href="${escapeHtml(result.yelpUrl || yelpFallbackUrl)}" target="_blank" rel="noreferrer">${icons.search}<span>Yelp</span></a>
+      </div>
+    </div>
+  `;
+}
+
+async function initPlaceWizardMap() {
+  if (!state.placeWizard || state.placeWizard.step !== 'location') return;
+  const wizard = state.placeWizard;
+  const mount = document.querySelector('#place-map');
+  if (!mount) return;
+  const coords = parseWizardCoords(wizard);
+  if (!coords) return;
+
+  try {
+    const L = await loadLeaflet();
+    if (!state.placeWizard || state.placeWizard.step !== 'location') return;
+    if (!document.body.contains(mount)) return;
+    if (mount.__leafletMap) {
+      mount.__leafletMap.remove();
+      mount.__leafletMap = null;
+    }
+    mount.innerHTML = '';
+    const map = L.map(mount, { scrollWheelZoom: false }).setView([coords.latitude, coords.longitude], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    const marker = L.marker([coords.latitude, coords.longitude], { draggable: true }).addTo(map);
+    map.on('click', (event) => {
+      marker.setLatLng(event.latlng);
+      setPlaceWizardCoords(event.latlng.lat, event.latlng.lng, { skipReverse: false }).catch(() => {});
+    });
+    marker.on('dragend', () => {
+      const latLng = marker.getLatLng();
+      setPlaceWizardCoords(latLng.lat, latLng.lng, { skipReverse: false }).catch(() => {});
+    });
+    mount.__leafletMap = map;
+  } catch (error) {
+    mount.textContent = 'Map unavailable';
+  }
+}
+
 document.addEventListener('click', async (event) => {
   const deleteButton = event.target.closest('[data-delete-type]');
   if (deleteButton) {
@@ -1179,6 +1742,15 @@ document.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('submit', async (event) => {
+  if (event.target.id === 'wizard-form') {
+    event.preventDefault();
+    try {
+      await saveWizardPlace(event.target);
+    } catch (error) {
+      showToast(error.message || 'Could not save place.');
+    }
+    return;
+  }
   if (event.target.id !== 'entity-form') return;
   event.preventDefault();
   try {
